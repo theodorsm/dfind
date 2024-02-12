@@ -11,6 +11,27 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
+type fingerprint struct {
+	HandshakeType   uint
+	Length          uint
+	FragmentOffset  uint
+	MajorVersion    byte
+	MinorVersion    byte
+	CipherLength    uint
+	Ciphers         []byte
+	ChosenCipher    [2]byte
+	ExtensionLength uint
+	Extensions      []byte
+}
+
+const OffsetContentType = 0x0
+const OffsetHandshakeType = 0xd
+const OffsetLength = 0xe
+const OffsetFragmentOffset = 0x13
+const OffsetMajorVersion = 0x19
+const OffsetMinorVersion = 0x1a
+const OffsetSessionLength = 0x3b
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide a pcap file to read")
@@ -28,68 +49,70 @@ func main() {
 
 		dtls := packet.ApplicationLayer().LayerContents()
 
-		contentType := 0x0
-		handshakeType := 0xd
-		length := 0xe
-		fragmentOffset := 0x13
-		majorVersion := 0x19
-		minorVersion := 0x1a
-		sessionLength := 0x3b
-		// cookieLength := 0x3c
+		fp := fingerprint{}
 
 		// Check if handshake record
-		if dtls[contentType] == 22 {
+		if dtls[OffsetContentType] == 22 {
 
-			switch dtls[handshakeType] {
+			fp.HandshakeType = uint(dtls[OffsetHandshakeType])
+
+			switch fp.HandshakeType {
 			case 0x1:
 				fmt.Println("=============")
 				fmt.Println("Client Hello:")
 
-				handshakeLength := uint(dtls[length+2]) | uint(dtls[length+1])<<8 | uint(dtls[length])<<16
-				fmt.Printf("Length: %d\n", handshakeLength)
+				fp.Length = uint(dtls[OffsetLength+2]) | uint(dtls[OffsetLength+1])<<8 | uint(dtls[OffsetLength])<<16
+				fmt.Printf("Length: %d\n", fp.Length)
 
-				fmt.Printf("Fragment Offset: %d\n", uint(dtls[fragmentOffset])|uint(dtls[fragmentOffset+1])<<8|uint(dtls[fragmentOffset+2])<<16)
+				fp.FragmentOffset = uint(dtls[OffsetFragmentOffset]) | uint(dtls[OffsetFragmentOffset+1])<<8 | uint(dtls[OffsetFragmentOffset+2])<<16
+				fmt.Printf("Fragment Offset: %d\n", fp.FragmentOffset)
 
-				fmt.Printf("DTLS v%d.%d\n", 0xff-dtls[majorVersion], 0xff-dtls[minorVersion])
+				fp.MajorVersion = dtls[OffsetMajorVersion]
+				fp.MinorVersion = dtls[OffsetMinorVersion]
+				fmt.Printf("DTLS v%d.%d\n", 0xff-fp.MajorVersion, 0xff-fp.MinorVersion)
 
-				cookieLength := sessionLength + int(dtls[sessionLength]) + 1
-				cipherLength := cookieLength + int(dtls[cookieLength]) + 1
-				cipherLengthValue := uint(dtls[cipherLength+1]) | uint(dtls[cipherLength])<<8
-				fmt.Printf("Cipher suite length: %d\n", cipherLengthValue)
+				OffsetCookieLength := OffsetSessionLength + int(dtls[OffsetSessionLength]) + 1
+				OffsetCipherLength := OffsetCookieLength + int(dtls[OffsetCookieLength]) + 1
+				fp.CipherLength = uint(dtls[OffsetCipherLength+1]) | uint(dtls[OffsetCipherLength])<<8
+				fmt.Printf("Cipher suite length: %d\n", fp.CipherLength)
 
-				ciphers := dtls[cipherLength+2 : cipherLength+2+int(cipherLengthValue)]
-				fmt.Printf("Ciphers: %x\n", ciphers)
+				fp.Ciphers = dtls[OffsetCipherLength+2 : OffsetCipherLength+2+int(fp.CipherLength)]
+				fmt.Printf("Ciphers: %x\n", fp.Ciphers)
 
-				compressionLength := cipherLength + 2 + int(cipherLengthValue) + 1
-				extensionLength := compressionLength + int(dtls[compressionLength]) + 1
-				extensionLengthValue := uint(dtls[extensionLength+1]) | uint(dtls[extensionLength])<<8
-				fmt.Printf("Extension length: %d\n", extensionLengthValue)
+				OffsetCompressionLength := OffsetCipherLength + 2 + int(fp.CipherLength) + 1
+				OffsetExtensionLength := OffsetCompressionLength + int(dtls[OffsetCompressionLength]) + 1
+				fp.ExtensionLength = uint(dtls[OffsetExtensionLength+1]) | uint(dtls[OffsetExtensionLength])<<8
+				fmt.Printf("Extension length: %d\n", fp.ExtensionLength)
 
-				extensions := dtls[extensionLength+2 : extensionLength+2+int(extensionLengthValue)]
-				fmt.Printf("Extensions: %x\n", extensions)
+				fp.Extensions = dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
+				fmt.Printf("Extensions: %x\n", fp.Extensions)
+				fmt.Printf("Struct: %#v\n", fp)
 			case 0x2:
 				fmt.Println("=============")
 				fmt.Println("Server Hello:")
 
-				handshakeLength := uint(dtls[length+2]) | uint(dtls[length+1])<<8 | uint(dtls[length])<<16
+				handshakeLength := uint(dtls[OffsetLength+2]) | uint(dtls[OffsetLength+1])<<8 | uint(dtls[OffsetLength])<<16
 				fmt.Printf("Length: %d\n", handshakeLength)
 
-				fmt.Printf("Fragment Offset: %d\n", uint(dtls[fragmentOffset])|uint(dtls[fragmentOffset+1])<<8|uint(dtls[fragmentOffset+2])<<16)
+				fmt.Printf("Fragment Offset: %d\n", uint(dtls[OffsetFragmentOffset])|uint(dtls[OffsetFragmentOffset+1])<<8|uint(dtls[OffsetFragmentOffset+2])<<16)
 
-				fmt.Printf("DTLS v%d.%d\n", 0xff-dtls[majorVersion], 0xff-dtls[minorVersion])
+				fmt.Printf("DTLS v%d.%d\n", 0xff-dtls[OffsetMajorVersion], 0xff-dtls[OffsetMinorVersion])
 
-				ciphersOffset := sessionLength + int(dtls[sessionLength]) + 1
-				fmt.Printf("Chosen cipher suite: %x\n", dtls[ciphersOffset:ciphersOffset+2])
-				extensionLength := ciphersOffset + 3
-				extensionLengthValue := uint(dtls[extensionLength+1]) | uint(dtls[extensionLength])<<8
-				fmt.Printf("Extension length: %d\n", extensionLengthValue)
+				OffsetChosenCipher := OffsetSessionLength + int(dtls[OffsetSessionLength]) + 1
+				fp.ChosenCipher = [2]byte(dtls[OffsetChosenCipher : OffsetChosenCipher+2])
+				fmt.Printf("Chosen cipher suite: %x\n", fp.ChosenCipher)
 
-				extensions := dtls[extensionLength+2 : extensionLength+2+int(extensionLengthValue)]
-				fmt.Printf("Extensions: %x\n", extensions)
+				OffsetExtensionLength := OffsetChosenCipher + 3
+				fp.ExtensionLength = uint(dtls[OffsetExtensionLength+1]) | uint(dtls[OffsetExtensionLength])<<8
+				fmt.Printf("Extension length: %d\n", fp.ExtensionLength)
+
+				fp.Extensions = dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
+				fmt.Printf("Extensions: %x\n", fp.Extensions)
+				fmt.Printf("Struct: %#v\n", fp)
 			default:
 				fmt.Println("=============")
 				fmt.Println("Other handshake type:")
-				fmt.Printf("%x\n", dtls[handshakeType:])
+				fmt.Printf("%x\n", dtls[OffsetHandshakeType:])
 			}
 
 		}
