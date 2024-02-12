@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/google/gopacket"
@@ -9,9 +10,13 @@ import (
 	"os"
 
 	"github.com/google/gopacket/pcap"
+
+	"database/sql"
+
+	"github.com/go-sql-driver/mysql"
 )
 
-type fingerprint struct {
+type Fingerprint struct {
 	HandshakeType   uint
 	Length          uint
 	FragmentOffset  uint
@@ -19,7 +24,7 @@ type fingerprint struct {
 	MinorVersion    byte
 	CipherLength    uint
 	Ciphers         []byte
-	ChosenCipher    [2]byte
+	ChosenCipher    []byte
 	ExtensionLength uint
 	Extensions      []byte
 }
@@ -32,7 +37,42 @@ const OffsetMajorVersion = 0x19
 const OffsetMinorVersion = 0x1a
 const OffsetSessionLength = 0x3b
 
+func addFingerprint(db *sql.DB, fp Fingerprint) error {
+	result, err := db.Exec("INSERT INTO fingerprint (type, handshakeType, length, fragmentOffset, majorVersion, minorVersion, cipherLength, ciphers, chosenCipher, extensionLength, extensions) VALUES ('snowflake', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", fp.HandshakeType, fp.Length, fp.FragmentOffset, int(fp.MajorVersion), int(fp.MinorVersion), fp.CipherLength, hex.EncodeToString(fp.Ciphers), hex.EncodeToString(fp.ChosenCipher), fp.ExtensionLength, hex.EncodeToString(fp.Extensions))
+	if err != nil {
+		return fmt.Errorf("addFingerprint: %v", err)
+	}
+	id, err := result.LastInsertId()
+	fmt.Printf("Fingerprint ID: %d\n", id)
+	if err != nil {
+		return fmt.Errorf("addFingerprint: %v", err)
+	}
+	return nil
+}
+
 func main() {
+
+	cfg := mysql.Config{
+		User:                 os.Getenv("DBUSER"),
+		Passwd:               os.Getenv("DBPASS"),
+		Net:                  "tcp",
+		Addr:                 "127.0.0.1:3306",
+		DBName:               "dtls_fingerprinting",
+		AllowNativePasswords: true,
+	}
+
+	db, err := sql.Open("mysql", cfg.FormatDSN())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	pingErr := db.Ping()
+	if pingErr != nil {
+		log.Fatal(pingErr)
+	}
+	fmt.Println("Connected to DB!")
+
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide a pcap file to read")
 		os.Exit(1)
@@ -49,7 +89,7 @@ func main() {
 
 		dtls := packet.ApplicationLayer().LayerContents()
 
-		fp := fingerprint{}
+		fp := Fingerprint{}
 
 		// Check if handshake record
 		if dtls[OffsetContentType] == 22 {
@@ -86,7 +126,10 @@ func main() {
 
 				fp.Extensions = dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
 				fmt.Printf("Extensions: %x\n", fp.Extensions)
-				fmt.Printf("Struct: %#v\n", fp)
+				err := addFingerprint(db, fp)
+				if err != nil {
+					fmt.Println(err)
+				}
 			case 0x2:
 				fmt.Println("=============")
 				fmt.Println("Server Hello:")
@@ -99,7 +142,7 @@ func main() {
 				fmt.Printf("DTLS v%d.%d\n", 0xff-dtls[OffsetMajorVersion], 0xff-dtls[OffsetMinorVersion])
 
 				OffsetChosenCipher := OffsetSessionLength + int(dtls[OffsetSessionLength]) + 1
-				fp.ChosenCipher = [2]byte(dtls[OffsetChosenCipher : OffsetChosenCipher+2])
+				fp.ChosenCipher = dtls[OffsetChosenCipher : OffsetChosenCipher+2]
 				fmt.Printf("Chosen cipher suite: %x\n", fp.ChosenCipher)
 
 				OffsetExtensionLength := OffsetChosenCipher + 3
@@ -108,7 +151,10 @@ func main() {
 
 				fp.Extensions = dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
 				fmt.Printf("Extensions: %x\n", fp.Extensions)
-				fmt.Printf("Struct: %#v\n", fp)
+				err := addFingerprint(db, fp)
+				if err != nil {
+					fmt.Println(err)
+				}
 			default:
 				fmt.Println("=============")
 				fmt.Println("Other handshake type:")
