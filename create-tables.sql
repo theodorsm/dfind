@@ -8,10 +8,22 @@ CREATE TABLE fingerprint(
 	fragmentOffset  INT NOT NULL,
 	majorVersion    INT NOT NULL, 
 	minorVersion    INT NOT NULL,
+  cookieLength    INT, 
 	cipherLength    INT,
 	ciphers         VARCHAR(255),
 	chosenCipher    VARCHAR(4), 
 	extensionLength INT NOT NULL,
 	extensions      VARCHAR(500) NOT NULL,
+  PRIMARY KEY(`id`)
+);
+
+DROP TABLE IF EXISTS fragment;
+CREATE TABLE fragment(
+  id              INT AUTO_INCREMENT NULL,
+  type            VARCHAR(255) NOT NULL,
+  filename        VARCHAR(255) NOT NULL,
+	handshakeType   INT NOT NULL, 
+	fragmentOffset  INT NOT NULL,
+	data            VARCHAR(1500) NOT NULL,
   PRIMARY KEY(`id`)
 );

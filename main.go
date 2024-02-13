@@ -20,6 +20,7 @@ type Fingerprint struct {
 	FragmentOffset  uint
 	MajorVersion    byte
 	MinorVersion    byte
+	CookieLength    uint
 	CipherLength    uint
 	Ciphers         []byte
 	ChosenCipher    []byte
@@ -40,10 +41,10 @@ const ServerHelloType = 0x2
 
 var fingerprintType string
 
-var analyzeFields = []string{"cipherLength", "ciphers", "chosenCipher", "extensionLength", "extensions"}
+var analyzeFields = []string{"cookieLength", "cipherLength", "ciphers", "chosenCipher", "extensionLength", "extensions"}
 
 func addFingerprint(db *sql.DB, filename string, fp Fingerprint) error {
-	result, err := db.Exec("INSERT INTO fingerprint (type, filename, handshakeType, length, fragmentOffset, majorVersion, minorVersion, cipherLength, ciphers, chosenCipher, extensionLength, extensions) VALUES (?, ? , ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", fingerprintType, filename, fp.HandshakeType, fp.Length, fp.FragmentOffset, int(fp.MajorVersion), int(fp.MinorVersion), fp.CipherLength, hex.EncodeToString(fp.Ciphers), hex.EncodeToString(fp.ChosenCipher), fp.ExtensionLength, hex.EncodeToString(fp.Extensions))
+	result, err := db.Exec("INSERT INTO fingerprint (type, filename, handshakeType, length, fragmentOffset, majorVersion, minorVersion, cookieLength, cipherLength, ciphers, chosenCipher, extensionLength, extensions) VALUES (?, ? , ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", fingerprintType, filename, fp.HandshakeType, fp.Length, fp.FragmentOffset, int(fp.MajorVersion), int(fp.MinorVersion), fp.CookieLength, fp.CipherLength, hex.EncodeToString(fp.Ciphers), hex.EncodeToString(fp.ChosenCipher), fp.ExtensionLength, hex.EncodeToString(fp.Extensions))
 	if err != nil {
 		return fmt.Errorf("addFingerprint: %v", err)
 	}
@@ -51,6 +52,19 @@ func addFingerprint(db *sql.DB, filename string, fp Fingerprint) error {
 	fmt.Printf("Fingerprint ID: %d\n", id)
 	if err != nil {
 		return fmt.Errorf("addFingerprint: %v", err)
+	}
+	return nil
+}
+
+func addFragment(db *sql.DB, filename string, fp Fingerprint, data []byte) error {
+	result, err := db.Exec("INSERT INTO fragment (type, filename, handshakeType, fragmentOffset, data) VALUES (?, ? , ?, ?, ?)", fingerprintType, filename, fp.HandshakeType, fp.FragmentOffset, hex.EncodeToString(data))
+	if err != nil {
+		return fmt.Errorf("addFragment: %v", err)
+	}
+	id, err := result.LastInsertId()
+	fmt.Printf("Fragment ID: %d\n", id)
+	if err != nil {
+		return fmt.Errorf("addFragment: %v", err)
 	}
 	return nil
 }
@@ -63,6 +77,7 @@ func printFingerprint(fp Fingerprint) {
 		fmt.Printf("Length: %d\n", fp.Length)
 		fmt.Printf("Fragment Offset: %d\n", fp.FragmentOffset)
 		fmt.Printf("DTLS v%d.%d\n", 0xff-fp.MajorVersion, 0xff-fp.MinorVersion)
+		fmt.Printf("Cookie length: %d\n", fp.CookieLength)
 		fmt.Printf("Cipher suite length: %d\n", fp.CipherLength)
 		fmt.Printf("Ciphers: %x\n", fp.Ciphers)
 		fmt.Printf("Extension length: %d\n", fp.ExtensionLength)
@@ -72,6 +87,7 @@ func printFingerprint(fp Fingerprint) {
 		fmt.Printf("Length: %d\n", fp.Length)
 		fmt.Printf("Fragment Offset: %d\n", fp.FragmentOffset)
 		fmt.Printf("DTLS v%d.%d\n", 0xff-fp.MajorVersion, 0xff-fp.MinorVersion)
+		fmt.Printf("Cookie length: %d\n", fp.CookieLength)
 		fmt.Printf("Chosen cipher suite: %x\n", fp.ChosenCipher)
 		fmt.Printf("Extension length: %d\n", fp.ExtensionLength)
 		fmt.Printf("Extensions: %x\n", fp.Extensions)
@@ -106,12 +122,14 @@ func parsePcap(db *sql.DB, path string, filename string) {
 				fragmentLength := uint(dtls[OffsetFragmentOffset+5]) | uint(dtls[OffsetFragmentOffset+4])<<8 | uint(dtls[OffsetFragmentOffset+3])<<16
 				if fragmentLength != fp.Length {
 					// TODO: parse fargemented records
+					addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
 					return
 				}
 				fp.MajorVersion = dtls[OffsetMajorVersion]
 				fp.MinorVersion = dtls[OffsetMinorVersion]
 				OffsetCookieLength := OffsetSessionLength + int(dtls[OffsetSessionLength]) + 1
-				OffsetCipherLength := OffsetCookieLength + int(dtls[OffsetCookieLength]) + 1
+				fp.CookieLength = uint(dtls[OffsetCookieLength])
+				OffsetCipherLength := OffsetCookieLength + int(fp.CookieLength) + 1
 				fp.CipherLength = uint(dtls[OffsetCipherLength+1]) | uint(dtls[OffsetCipherLength])<<8
 				fp.Ciphers = dtls[OffsetCipherLength+2 : OffsetCipherLength+2+int(fp.CipherLength)]
 				OffsetCompressionLength := OffsetCipherLength + 2 + int(fp.CipherLength) + 1
@@ -128,6 +146,7 @@ func parsePcap(db *sql.DB, path string, filename string) {
 				fp.FragmentOffset = uint(dtls[OffsetFragmentOffset+2]) | uint(dtls[OffsetFragmentOffset+1])<<8 | uint(dtls[OffsetFragmentOffset])<<16
 				fragmentLength := uint(dtls[OffsetFragmentOffset+5]) | uint(dtls[OffsetFragmentOffset+4])<<8 | uint(dtls[OffsetFragmentOffset+3])<<16
 				if fragmentLength != fp.Length {
+					addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
 					return
 				}
 				fp.MajorVersion = dtls[OffsetMajorVersion]
