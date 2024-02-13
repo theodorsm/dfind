@@ -150,6 +150,51 @@ func parsePcap(db *sql.DB, path string, filename string) {
 	}
 }
 
+func analyze(db *sql.DB) {
+	fmt.Println("Analyzing")
+	var cipherLengths []string
+	var identifiers []string
+
+	rows, err := db.Query("SELECT cipherLength FROM fingerprint group by cipherLength")
+	if err != nil {
+		fmt.Printf("CipherLength query failed: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cipherLength string
+		if err := rows.Scan(&cipherLength); err != nil {
+			fmt.Printf("Could not scan length: %v", err)
+			return
+		}
+		cipherLengths = append(cipherLengths, cipherLength)
+	}
+
+	for _, cl := range cipherLengths {
+		var results []string
+		rows, err := db.Query("SELECT type FROM fingerprint where cipherLength = ? group by type", cl)
+		if err != nil {
+			fmt.Printf("type query failed: %v", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var res string
+			if err := rows.Scan(&res); err != nil {
+				fmt.Printf("Could not scan type: %v", err)
+				return
+			}
+			results = append(results, res)
+		}
+		if len(results) == 1 && results[0] == "snowflake" {
+			identifiers = append(identifiers, cl)
+		}
+	}
+	if len(identifiers) > 0 {
+		fmt.Printf("Identifiers for cipherLength: %v\n", identifiers)
+	} else {
+		fmt.Printf("No identifiers were found for cipherLength")
+	}
+}
+
 func main() {
 
 	cfg := mysql.Config{
@@ -173,14 +218,28 @@ func main() {
 	}
 	fmt.Println("Connected to DB!")
 
-	if len(os.Args) < 3 {
+	if len(os.Args) < 2 {
+		fmt.Println("Please provide action")
+		os.Exit(1)
+	}
+
+	cmd := os.Args[1]
+
+	if cmd == "analyze" {
+		analyze(db)
+		return
+	} else if cmd != "fingerprint" {
+		return
+	}
+
+	if len(os.Args) < 4 {
 		fmt.Println("Please provide fingerprint type and a path to pcaps")
 		os.Exit(1)
 	}
 
-	fingerprintType = os.Args[1]
+	fingerprintType = os.Args[2]
 
-	err = filepath.Walk(os.Args[2], func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(os.Args[3], func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			fmt.Println(err)
 			return err
