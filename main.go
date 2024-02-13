@@ -40,6 +40,8 @@ const ServerHelloType = 0x2
 
 var fingerprintType string
 
+var analyzeFields = []string{"cipherLength", "ciphers", "chosenCipher", "extensionLength", "extensions"}
+
 func addFingerprint(db *sql.DB, filename string, fp Fingerprint) error {
 	result, err := db.Exec("INSERT INTO fingerprint (type, filename, handshakeType, length, fragmentOffset, majorVersion, minorVersion, cipherLength, ciphers, chosenCipher, extensionLength, extensions) VALUES (?, ? , ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", fingerprintType, filename, fp.HandshakeType, fp.Length, fp.FragmentOffset, int(fp.MajorVersion), int(fp.MinorVersion), fp.CipherLength, hex.EncodeToString(fp.Ciphers), hex.EncodeToString(fp.ChosenCipher), fp.ExtensionLength, hex.EncodeToString(fp.Extensions))
 	if err != nil {
@@ -150,28 +152,27 @@ func parsePcap(db *sql.DB, path string, filename string) {
 	}
 }
 
-func analyze(db *sql.DB) {
-	fmt.Println("Analyzing")
-	var cipherLengths []string
+func analyze(db *sql.DB, field string) {
+	var fields []string
 	var identifiers []string
 
-	rows, err := db.Query("SELECT cipherLength FROM fingerprint group by cipherLength")
+	rows, err := db.Query(fmt.Sprintf("SELECT %s FROM fingerprint group by %s", field, field))
 	if err != nil {
-		fmt.Printf("CipherLength query failed: %v", err)
+		fmt.Printf("%s query failed: %v", field, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var cipherLength string
-		if err := rows.Scan(&cipherLength); err != nil {
-			fmt.Printf("Could not scan length: %v", err)
+		var fieldVal string
+		if err := rows.Scan(&fieldVal); err != nil {
+			fmt.Printf("Could not scan %s: %v", field, err)
 			return
 		}
-		cipherLengths = append(cipherLengths, cipherLength)
+		fields = append(fields, fieldVal)
 	}
 
-	for _, cl := range cipherLengths {
+	for _, cl := range fields {
 		var results []string
-		rows, err := db.Query("SELECT type FROM fingerprint where cipherLength = ? group by type", cl)
+		rows, err := db.Query(fmt.Sprintf("SELECT type FROM fingerprint where %s = ? group by type", field), cl)
 		if err != nil {
 			fmt.Printf("type query failed: %v", err)
 		}
@@ -179,7 +180,7 @@ func analyze(db *sql.DB) {
 		for rows.Next() {
 			var res string
 			if err := rows.Scan(&res); err != nil {
-				fmt.Printf("Could not scan type: %v", err)
+				fmt.Printf("Could not scan type for field %s: %v", field, err)
 				return
 			}
 			results = append(results, res)
@@ -189,9 +190,9 @@ func analyze(db *sql.DB) {
 		}
 	}
 	if len(identifiers) > 0 {
-		fmt.Printf("Identifiers for cipherLength: %v\n", identifiers)
+		fmt.Printf("Identifiers for %s: %v\n", field, identifiers)
 	} else {
-		fmt.Printf("No identifiers were found for cipherLength")
+		fmt.Printf("No identifiers were found for %s\n", field)
 	}
 }
 
@@ -226,7 +227,9 @@ func main() {
 	cmd := os.Args[1]
 
 	if cmd == "analyze" {
-		analyze(db)
+		for _, field := range analyzeFields {
+			analyze(db, field)
+		}
 		return
 	} else if cmd != "fingerprint" {
 		return
