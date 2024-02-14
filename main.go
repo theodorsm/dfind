@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	//	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -10,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	//	"github.com/go-sql-driver/mysql"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
 	"github.com/jackc/pgx/v5"
@@ -49,7 +47,7 @@ func addFingerprint(db *pgx.Conn, filename string, fp Fingerprint) error {
 	var result int
 	err := db.QueryRow(context.Background(), "INSERT INTO fingerprint (type, filename, handshakeType, length, fragmentOffset, majorVersion, minorVersion, cookieLength, cipherLength, ciphers, chosenCipher, extensionLength, extensions) VALUES ($1, $2 , $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id", fingerprintType, filename, fp.HandshakeType, fp.Length, fp.FragmentOffset, int(fp.MajorVersion), int(fp.MinorVersion), fp.CookieLength, fp.CipherLength, hex.EncodeToString(fp.Ciphers), hex.EncodeToString(fp.ChosenCipher), fp.ExtensionLength, hex.EncodeToString(fp.Extensions)).Scan(&result)
 	if err != nil {
-		return fmt.Errorf("addFingerprint: %v", err)
+		return fmt.Errorf("addFingerprint: %v\n", err)
 	}
 	fmt.Printf("Fingerprint ID: %d\n", result)
 	return nil
@@ -59,7 +57,7 @@ func addFragment(db *pgx.Conn, filename string, fp Fingerprint, data []byte) err
 	var result int
 	err := db.QueryRow(context.Background(), "INSERT INTO fragment (type, filename, handshakeType, fragmentOffset, data) VALUES ($1, $2 , $3, $4, $5) RETURNING id", fingerprintType, filename, fp.HandshakeType, fp.FragmentOffset, hex.EncodeToString(data)).Scan(&result)
 	if err != nil {
-		return fmt.Errorf("addFragment: %v", err)
+		return fmt.Errorf("addFragment: %v\n", err)
 	}
 	fmt.Printf("Fragment ID: %d\n", result)
 	return nil
@@ -173,13 +171,13 @@ func analyze(db *pgx.Conn, field string) {
 
 	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT %s FROM fingerprint group by %s", field, field))
 	if err != nil {
-		fmt.Printf("%s query failed: %v", field, err)
+		fmt.Printf("%s query failed: %v\n", field, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var fieldVal string
 		if err := rows.Scan(&fieldVal); err != nil {
-			fmt.Printf("Could not scan %s: %v", field, err)
+			fmt.Printf("Could not scan %s: %v\n", field, err)
 			return
 		}
 		fields = append(fields, fieldVal)
@@ -189,13 +187,13 @@ func analyze(db *pgx.Conn, field string) {
 		var results []string
 		rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT type FROM fingerprint where %s = $1 group by type", field), cl)
 		if err != nil {
-			fmt.Printf("type query failed: %v", err)
+			fmt.Printf("type query failed: %v\n", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var res string
 			if err := rows.Scan(&res); err != nil {
-				fmt.Printf("Could not scan type for field %s: %v", field, err)
+				fmt.Printf("Could not scan type for field %s: %v\n", field, err)
 				return
 			}
 			results = append(results, res)
@@ -208,6 +206,51 @@ func analyze(db *pgx.Conn, field string) {
 		fmt.Printf("Identifiers for %s: %v\n", field, identifiers)
 	} else {
 		fmt.Printf("No identifiers were found for %s\n", field)
+	}
+}
+
+func analyzeLev(db *pgx.Conn) {
+
+	var extensionsArr []string
+	var filenameArr []string
+	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT extensions,filename FROM fingerprint WHERE type = 'snowflake'"))
+	if err != nil {
+		fmt.Printf("Snowflake extensions query failed: %v", err)
+	}
+
+	for rows.Next() {
+		var extensions string
+		var filename string
+		if err := rows.Scan(&extensions, &filename); err != nil {
+			fmt.Printf("Could not scan: %v\n", err)
+			return
+		}
+		extensionsArr = append(extensionsArr, extensions)
+		filenameArr = append(filenameArr, filename)
+	}
+	rows.Close()
+
+	for i, extension := range extensionsArr {
+		innerRows, err := db.Query(context.Background(), fmt.Sprintf("select type, extensions, filename, levenshtein(extensions, $1) from fingerprint where type != 'snowflake' and levenshtein(extensions, $2) BETWEEN 1 AND 20"), extension, extension)
+		if err != nil {
+			fmt.Printf("Levenshtein query failed: %v\n", err)
+		}
+		for innerRows.Next() {
+			var innerExtensions string
+			var filename string
+			var fingerprintType string
+			var distance int
+			if err := innerRows.Scan(&fingerprintType, &innerExtensions, &filename, &distance); err != nil {
+				fmt.Printf("Could not scan extensions: %v\n", err)
+				return
+			}
+			fmt.Printf("Levenshtein distance: %d\n", distance)
+			fmt.Println(filenameArr[i])
+			fmt.Println(extension)
+			fmt.Println(filename)
+			fmt.Println(innerExtensions)
+		}
+		innerRows.Close()
 	}
 }
 
@@ -239,6 +282,9 @@ func main() {
 		for _, field := range analyzeFields {
 			analyze(db, field)
 		}
+		return
+	} else if cmd == "extensions" {
+		analyzeLev(db)
 		return
 	} else if cmd != "fingerprint" {
 		return

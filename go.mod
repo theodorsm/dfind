@@ -3,7 +3,7 @@ module dtls-passive-fingerprinting
 go 1.21.0
 
 require (
-	github.com/go-sql-driver/mysql v1.7.1
+	github.com/agnivade/levenshtein v1.1.1
 	github.com/google/gopacket v1.1.19
 	github.com/jackc/pgx/v5 v5.5.3
 )
