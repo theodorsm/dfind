@@ -1,7 +1,8 @@
 package main
 
 import (
-	"database/sql"
+	"context"
+	//	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -9,9 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/go-sql-driver/mysql"
+	//	"github.com/go-sql-driver/mysql"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
+	"github.com/jackc/pgx/v5"
 )
 
 type Fingerprint struct {
@@ -43,29 +45,23 @@ var fingerprintType string
 
 var analyzeFields = []string{"cookieLength", "cipherLength", "ciphers", "chosenCipher", "extensionLength", "extensions"}
 
-func addFingerprint(db *sql.DB, filename string, fp Fingerprint) error {
-	result, err := db.Exec("INSERT INTO fingerprint (type, filename, handshakeType, length, fragmentOffset, majorVersion, minorVersion, cookieLength, cipherLength, ciphers, chosenCipher, extensionLength, extensions) VALUES (?, ? , ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", fingerprintType, filename, fp.HandshakeType, fp.Length, fp.FragmentOffset, int(fp.MajorVersion), int(fp.MinorVersion), fp.CookieLength, fp.CipherLength, hex.EncodeToString(fp.Ciphers), hex.EncodeToString(fp.ChosenCipher), fp.ExtensionLength, hex.EncodeToString(fp.Extensions))
+func addFingerprint(db *pgx.Conn, filename string, fp Fingerprint) error {
+	var result int
+	err := db.QueryRow(context.Background(), "INSERT INTO fingerprint (type, filename, handshakeType, length, fragmentOffset, majorVersion, minorVersion, cookieLength, cipherLength, ciphers, chosenCipher, extensionLength, extensions) VALUES ($1, $2 , $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id", fingerprintType, filename, fp.HandshakeType, fp.Length, fp.FragmentOffset, int(fp.MajorVersion), int(fp.MinorVersion), fp.CookieLength, fp.CipherLength, hex.EncodeToString(fp.Ciphers), hex.EncodeToString(fp.ChosenCipher), fp.ExtensionLength, hex.EncodeToString(fp.Extensions)).Scan(&result)
 	if err != nil {
 		return fmt.Errorf("addFingerprint: %v", err)
 	}
-	id, err := result.LastInsertId()
-	fmt.Printf("Fingerprint ID: %d\n", id)
-	if err != nil {
-		return fmt.Errorf("addFingerprint: %v", err)
-	}
+	fmt.Printf("Fingerprint ID: %d\n", result)
 	return nil
 }
 
-func addFragment(db *sql.DB, filename string, fp Fingerprint, data []byte) error {
-	result, err := db.Exec("INSERT INTO fragment (type, filename, handshakeType, fragmentOffset, data) VALUES (?, ? , ?, ?, ?)", fingerprintType, filename, fp.HandshakeType, fp.FragmentOffset, hex.EncodeToString(data))
+func addFragment(db *pgx.Conn, filename string, fp Fingerprint, data []byte) error {
+	var result int
+	err := db.QueryRow(context.Background(), "INSERT INTO fragment (type, filename, handshakeType, fragmentOffset, data) VALUES ($1, $2 , $3, $4, $5) RETURNING id", fingerprintType, filename, fp.HandshakeType, fp.FragmentOffset, hex.EncodeToString(data)).Scan(&result)
 	if err != nil {
 		return fmt.Errorf("addFragment: %v", err)
 	}
-	id, err := result.LastInsertId()
-	fmt.Printf("Fragment ID: %d\n", id)
-	if err != nil {
-		return fmt.Errorf("addFragment: %v", err)
-	}
+	fmt.Printf("Fragment ID: %d\n", result)
 	return nil
 }
 
@@ -96,7 +92,7 @@ func printFingerprint(fp Fingerprint) {
 	}
 }
 
-func parsePcap(db *sql.DB, path string, filename string) {
+func parsePcap(db *pgx.Conn, path string, filename string) {
 	handle, err := pcap.OpenOffline(path)
 	if err != nil {
 		log.Fatal(err)
@@ -171,11 +167,11 @@ func parsePcap(db *sql.DB, path string, filename string) {
 	}
 }
 
-func analyze(db *sql.DB, field string) {
+func analyze(db *pgx.Conn, field string) {
 	var fields []string
 	var identifiers []string
 
-	rows, err := db.Query(fmt.Sprintf("SELECT %s FROM fingerprint group by %s", field, field))
+	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT %s FROM fingerprint group by %s", field, field))
 	if err != nil {
 		fmt.Printf("%s query failed: %v", field, err)
 	}
@@ -191,7 +187,7 @@ func analyze(db *sql.DB, field string) {
 
 	for _, cl := range fields {
 		var results []string
-		rows, err := db.Query(fmt.Sprintf("SELECT type FROM fingerprint where %s = ? group by type", field), cl)
+		rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT type FROM fingerprint where %s = $1 group by type", field), cl)
 		if err != nil {
 			fmt.Printf("type query failed: %v", err)
 		}
@@ -217,22 +213,16 @@ func analyze(db *sql.DB, field string) {
 
 func main() {
 
-	cfg := mysql.Config{
-		User:                 os.Getenv("DBUSER"),
-		Passwd:               os.Getenv("DBPASS"),
-		Net:                  "tcp",
-		Addr:                 "127.0.0.1:3306",
-		DBName:               "dtls_fingerprinting",
-		AllowNativePasswords: true,
-	}
-
-	db, err := sql.Open("mysql", cfg.FormatDSN())
+	url := "postgres://postgres:@localhost:5432/dtls_fingerprinting"
+	//db, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
+	db, err := pgx.Connect(context.Background(), url)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
+		os.Exit(1)
 	}
-	defer db.Close()
+	defer db.Close(context.Background())
 
-	pingErr := db.Ping()
+	pingErr := db.Ping(context.Background())
 	if pingErr != nil {
 		log.Fatal(pingErr)
 	}
