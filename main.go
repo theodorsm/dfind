@@ -41,7 +41,7 @@ const ServerHelloType = 0x2
 
 var fingerprintType string
 
-var analyzeFields = []string{"cookieLength", "cipherLength", "ciphers", "chosenCipher", "extensionLength", "extensions"}
+var analyzeFields = []string{"length", "cookieLength", "cipherLength", "ciphers", "chosenCipher", "extensionLength", "extensions"}
 
 func addFingerprint(db *pgx.Conn, filename string, fp Fingerprint) error {
 	var result int
