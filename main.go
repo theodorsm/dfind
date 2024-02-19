@@ -211,46 +211,64 @@ func analyze(db *pgx.Conn, field string) {
 
 func analyzeLev(db *pgx.Conn) {
 
-	var extensionsArr []string
-	var filenameArr []string
-	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT extensions,filename FROM fingerprint WHERE type = 'snowflake'"))
+	type snowflakeExt struct {
+		Extensions  string
+		SnowflakeId int
+	}
+
+	var snowflakeExtArr []snowflakeExt
+
+	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT max(id), extensions FROM fingerprint WHERE type = 'snowflake' group by extensions"))
 	if err != nil {
 		fmt.Printf("Snowflake extensions query failed: %v", err)
 	}
 
 	for rows.Next() {
-		var extensions string
-		var filename string
-		if err := rows.Scan(&extensions, &filename); err != nil {
+		se := snowflakeExt{}
+		if err := rows.Scan(&se.SnowflakeId, &se.Extensions); err != nil {
 			fmt.Printf("Could not scan: %v\n", err)
 			return
 		}
-		extensionsArr = append(extensionsArr, extensions)
-		filenameArr = append(filenameArr, filename)
+		snowflakeExtArr = append(snowflakeExtArr, se)
 	}
 	rows.Close()
 
-	for i, extension := range extensionsArr {
-		innerRows, err := db.Query(context.Background(), fmt.Sprintf("select type, extensions, filename, levenshtein(extensions, $1) from fingerprint where type != 'snowflake' and levenshtein(extensions, $2) BETWEEN 1 AND 20"), extension, extension)
+	for _, se := range snowflakeExtArr {
+		cmpRows, err := db.Query(context.Background(), fmt.Sprintf("SELECT count(id), extensions, levenshtein(extensions, $1) FROM fingerprint WHERE type != 'snowflake' AND levenshtein(extensions, $2) BETWEEN 1 AND 20 GROUP BY extensions"), se.Extensions, se.Extensions)
 		if err != nil {
 			fmt.Printf("Levenshtein query failed: %v\n", err)
 		}
-		for innerRows.Next() {
-			var innerExtensions string
-			var filename string
-			var fingerprintType string
-			var distance int
-			if err := innerRows.Scan(&fingerprintType, &innerExtensions, &filename, &distance); err != nil {
+		type fuzzyCmp struct {
+			CmpExtensions string
+			Distance      int
+			Count         int
+		}
+
+		var fuzzyCmpArr []fuzzyCmp
+
+		for cmpRows.Next() {
+			fc := fuzzyCmp{}
+			if err := cmpRows.Scan(&fc.Count, &fc.CmpExtensions, &fc.Distance); err != nil {
 				fmt.Printf("Could not scan extensions: %v\n", err)
 				return
 			}
-			fmt.Printf("Levenshtein distance: %d\n", distance)
-			fmt.Println(filenameArr[i])
-			fmt.Println(extension)
-			fmt.Println(filename)
-			fmt.Println(innerExtensions)
+			fuzzyCmpArr = append(fuzzyCmpArr, fc)
 		}
-		innerRows.Close()
+		cmpRows.Close()
+
+		for _, fc := range fuzzyCmpArr {
+			fmt.Printf("Levenshtein distance: %d\n", fc.Distance)
+			fmt.Println(se.Extensions)
+			fmt.Println(fc.Count)
+			fmt.Println(fc.CmpExtensions)
+
+			var result int
+			err := db.QueryRow(context.Background(), "INSERT INTO fuzzy_extensions (snowflake_id, levenshtein, extensions) VALUES ($1, $2 , $3) RETURNING id", se.SnowflakeId, fc.Distance, fc.CmpExtensions).Scan(&result)
+			if err != nil {
+				fmt.Printf("Error on insert fuzzy_extensions: %v\n", err)
+			}
+			fmt.Printf("fuzzy_extensions ID: %d\n", result)
+		}
 	}
 }
 

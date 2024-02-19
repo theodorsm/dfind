@@ -110,3 +110,5 @@ select COUNT(id), type, extensionLength from fingerprint where type = 'google' g
 -- |      1493 | facebook |           16 |
 -- |       181 | facebook |           24 |
 -- +-----------+----------+--------------+
+--
+select fuzzy_extensions.extensions AS fuzzy, fingerprint.extensions AS fingerprint, filename from fuzzy_extensions join fingerprint on snowflake_id = fingerprint.id;
