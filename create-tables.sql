@@ -33,3 +33,11 @@ CREATE TABLE fuzzy_extensions(
 	levenshtein   INT NOT NULL, 
 	extensions      VARCHAR(500) NOT NULL
 );
+
+DROP TABLE IF EXISTS hello_verify;
+CREATE TABLE hello_verify(
+  id              SERIAL PRIMARY KEY,
+  type            VARCHAR(255) NOT NULL,
+  filename        VARCHAR(255) NOT NULL,
+	data            VARCHAR(1500) NOT NULL
+);

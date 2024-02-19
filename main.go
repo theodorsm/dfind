@@ -38,6 +38,7 @@ const OffsetSessionLength = 0x3b
 
 const ClientHelloType = 0x1
 const ServerHelloType = 0x2
+const HelloVerifyRequest = 0x3
 
 var fingerprintType string
 
@@ -60,6 +61,16 @@ func addFragment(db *pgx.Conn, filename string, fp Fingerprint, data []byte) err
 		return fmt.Errorf("addFragment: %v\n", err)
 	}
 	fmt.Printf("Fragment ID: %d\n", result)
+	return nil
+}
+
+func addHelloVerify(db *pgx.Conn, filename string, data []byte) error {
+	var result int
+	err := db.QueryRow(context.Background(), "INSERT INTO hello_verify (type, filename, data) VALUES ($1, $2 , $3) RETURNING id", fingerprintType, filename, hex.EncodeToString(data)).Scan(&result)
+	if err != nil {
+		return fmt.Errorf("addHelloVerify: %v\n", err)
+	}
+	fmt.Printf("Hello verify ID: %d\n", result)
 	return nil
 }
 
@@ -116,7 +127,10 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 				fragmentLength := uint(dtls[OffsetFragmentOffset+5]) | uint(dtls[OffsetFragmentOffset+4])<<8 | uint(dtls[OffsetFragmentOffset+3])<<16
 				if fragmentLength != fp.Length {
 					// TODO: parse fargemented records
-					addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
+					err := addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
+					if err != nil {
+						fmt.Println(err)
+					}
 					return
 				}
 				fp.MajorVersion = dtls[OffsetMajorVersion]
@@ -140,7 +154,10 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 				fp.FragmentOffset = uint(dtls[OffsetFragmentOffset+2]) | uint(dtls[OffsetFragmentOffset+1])<<8 | uint(dtls[OffsetFragmentOffset])<<16
 				fragmentLength := uint(dtls[OffsetFragmentOffset+5]) | uint(dtls[OffsetFragmentOffset+4])<<8 | uint(dtls[OffsetFragmentOffset+3])<<16
 				if fragmentLength != fp.Length {
-					addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
+					err := addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
+					if err != nil {
+						fmt.Println(err)
+					}
 					return
 				}
 				fp.MajorVersion = dtls[OffsetMajorVersion]
@@ -154,6 +171,12 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 				err := addFingerprint(db, filename, fp)
 				if err != nil {
 					fmt.Println(err)
+				}
+			case HelloVerifyRequest:
+				err := addHelloVerify(db, filename, dtls[OffsetHandshakeType+1:])
+				if err != nil {
+					fmt.Println(err)
+					return
 				}
 			default:
 				//fmt.Println("=============")
@@ -234,7 +257,7 @@ func analyzeLev(db *pgx.Conn) {
 	rows.Close()
 
 	for _, se := range snowflakeExtArr {
-		cmpRows, err := db.Query(context.Background(), fmt.Sprintf("SELECT count(id), extensions, levenshtein(extensions, $1) FROM fingerprint WHERE type != 'snowflake' AND levenshtein(extensions, $2) BETWEEN 1 AND 20 GROUP BY extensions"), se.Extensions, se.Extensions)
+		cmpRows, err := db.Query(context.Background(), fmt.Sprintf("SELECT count(id), extensions, levenshtein(extensions, $1) FROM fingerprint WHERE type != 'snowflake' AND levenshtein(extensions, $2) BETWEEN 1 AND 32 GROUP BY extensions"), se.Extensions, se.Extensions)
 		if err != nil {
 			fmt.Printf("Levenshtein query failed: %v\n", err)
 		}
