@@ -28,6 +28,12 @@ type Fingerprint struct {
 	Extensions      []byte
 }
 
+type Extension struct {
+	Type   uint
+	Length uint
+	Value  []byte
+}
+
 const OffsetContentType = 0x0
 const OffsetHandshakeType = 0xd
 const OffsetLength = 0xe
@@ -143,7 +149,21 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 				OffsetCompressionLength := OffsetCipherLength + 2 + int(fp.CipherLength) + 1
 				OffsetExtensionLength := OffsetCompressionLength + int(dtls[OffsetCompressionLength]) + 1
 				fp.ExtensionLength = uint(dtls[OffsetExtensionLength+1]) | uint(dtls[OffsetExtensionLength])<<8
-				fp.Extensions = dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
+
+				extensionBytes := dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
+
+				fp.Extensions = extensionBytes
+
+				for len(extensionBytes) != 0 {
+					extType := uint(extensionBytes[1]) | uint(extensionBytes[0])<<8
+					extLen := uint(extensionBytes[3]) | uint(extensionBytes[2])<<8
+					extValue := extensionBytes[4 : 4+extLen]
+					ext := Extension{extType, extLen, extValue}
+					extensionBytes = extensionBytes[4+extLen:]
+					fmt.Println("PARSED EXTENSION: ")
+					fmt.Println(ext)
+				}
+
 				printFingerprint(fp)
 				err := addFingerprint(db, filename, fp)
 				if err != nil {
