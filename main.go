@@ -107,6 +107,14 @@ func printFingerprint(fp Fingerprint) {
 	}
 }
 
+func doubleByteLength(buf []byte, offset int) uint {
+	return uint(buf[offset+1]) | uint(buf[offset])<<8
+}
+
+func tripleByteLength(buf []byte, offset int) uint {
+	return uint(buf[offset+2]) | uint(buf[offset+1])<<8 | uint(buf[offset])<<16
+}
+
 func parsePcap(db *pgx.Conn, path string, filename string) {
 	handle, err := pcap.OpenOffline(path)
 	if err != nil {
@@ -128,11 +136,11 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 
 			switch fp.HandshakeType {
 			case ClientHelloType:
-				fp.Length = uint(dtls[OffsetLength+2]) | uint(dtls[OffsetLength+1])<<8 | uint(dtls[OffsetLength])<<16
-				fp.FragmentOffset = uint(dtls[OffsetFragmentOffset+2]) | uint(dtls[OffsetFragmentOffset+1])<<8 | uint(dtls[OffsetFragmentOffset])<<16
-				fragmentLength := uint(dtls[OffsetFragmentOffset+5]) | uint(dtls[OffsetFragmentOffset+4])<<8 | uint(dtls[OffsetFragmentOffset+3])<<16
+				fp.Length = tripleByteLength(dtls, OffsetLength)
+				fp.FragmentOffset = tripleByteLength(dtls, OffsetFragmentOffset)
+				fragmentLength := tripleByteLength(dtls, OffsetFragmentOffset+3)
 				if fragmentLength != fp.Length {
-					// TODO: parse fargemented records
+					// TODO: parse fragemented records
 					err := addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
 					if err != nil {
 						fmt.Println(err)
@@ -144,19 +152,19 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 				OffsetCookieLength := OffsetSessionLength + int(dtls[OffsetSessionLength]) + 1
 				fp.CookieLength = uint(dtls[OffsetCookieLength])
 				OffsetCipherLength := OffsetCookieLength + int(fp.CookieLength) + 1
-				fp.CipherLength = uint(dtls[OffsetCipherLength+1]) | uint(dtls[OffsetCipherLength])<<8
+				fp.CipherLength = doubleByteLength(dtls, OffsetCipherLength)
 				fp.Ciphers = dtls[OffsetCipherLength+2 : OffsetCipherLength+2+int(fp.CipherLength)]
 				OffsetCompressionLength := OffsetCipherLength + 2 + int(fp.CipherLength) + 1
 				OffsetExtensionLength := OffsetCompressionLength + int(dtls[OffsetCompressionLength]) + 1
-				fp.ExtensionLength = uint(dtls[OffsetExtensionLength+1]) | uint(dtls[OffsetExtensionLength])<<8
+				fp.ExtensionLength = doubleByteLength(dtls, OffsetExtensionLength)
 
 				extensionBytes := dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
 
 				fp.Extensions = extensionBytes
 
 				for len(extensionBytes) != 0 {
-					extType := uint(extensionBytes[1]) | uint(extensionBytes[0])<<8
-					extLen := uint(extensionBytes[3]) | uint(extensionBytes[2])<<8
+					extType := doubleByteLength(extensionBytes, 0)
+					extLen := doubleByteLength(extensionBytes, 2)
 					extValue := extensionBytes[4 : 4+extLen]
 					ext := Extension{extType, extLen, extValue}
 					extensionBytes = extensionBytes[4+extLen:]
@@ -170,9 +178,9 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 					fmt.Println(err)
 				}
 			case ServerHelloType:
-				fp.Length = uint(dtls[OffsetLength+2]) | uint(dtls[OffsetLength+1])<<8 | uint(dtls[OffsetLength])<<16
-				fp.FragmentOffset = uint(dtls[OffsetFragmentOffset+2]) | uint(dtls[OffsetFragmentOffset+1])<<8 | uint(dtls[OffsetFragmentOffset])<<16
-				fragmentLength := uint(dtls[OffsetFragmentOffset+5]) | uint(dtls[OffsetFragmentOffset+4])<<8 | uint(dtls[OffsetFragmentOffset+3])<<16
+				fp.Length = tripleByteLength(dtls, OffsetLength)
+				fp.FragmentOffset = tripleByteLength(dtls, OffsetFragmentOffset)
+				fragmentLength := tripleByteLength(dtls, OffsetFragmentOffset+3)
 				if fragmentLength != fp.Length {
 					err := addFragment(db, filename, fp, dtls[OffsetFragmentOffset+4:])
 					if err != nil {
@@ -185,7 +193,7 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 				OffsetChosenCipher := OffsetSessionLength + int(dtls[OffsetSessionLength]) + 1
 				fp.ChosenCipher = dtls[OffsetChosenCipher : OffsetChosenCipher+2]
 				OffsetExtensionLength := OffsetChosenCipher + 3
-				fp.ExtensionLength = uint(dtls[OffsetExtensionLength+1]) | uint(dtls[OffsetExtensionLength])<<8
+				fp.ExtensionLength = doubleByteLength(dtls, OffsetExtensionLength)
 				fp.Extensions = dtls[OffsetExtensionLength+2 : OffsetExtensionLength+2+int(fp.ExtensionLength)]
 				printFingerprint(fp)
 				err := addFingerprint(db, filename, fp)
@@ -199,16 +207,18 @@ func parsePcap(db *pgx.Conn, path string, filename string) {
 					return
 				}
 			default:
-				//fmt.Println("=============")
-				//fmt.Println("Other handshake type:")
-				//fmt.Printf("%x\n", dtls[OffsetHandshakeType:])
+				/*
+					fmt.Println("=============")
+					fmt.Println("Other handshake type:")
+					fmt.Printf("%x\n", dtls[OffsetHandshakeType:])
+				*/
 			}
 
 		}
 	}
 }
 
-func analyze(db *pgx.Conn, field string) {
+func analyze(db *pgx.Conn, field string, fpType string) {
 	var fields []string
 	var identifiers []string
 
@@ -241,7 +251,7 @@ func analyze(db *pgx.Conn, field string) {
 			}
 			results = append(results, res)
 		}
-		if len(results) == 1 && results[0] == "snowflake" {
+		if len(results) == 1 && results[0] == fpType {
 			identifiers = append(identifiers, cl)
 		}
 	}
@@ -252,32 +262,32 @@ func analyze(db *pgx.Conn, field string) {
 	}
 }
 
-func analyzeLev(db *pgx.Conn) {
+func analyzeLev(db *pgx.Conn, fpType string) {
 
-	type snowflakeExt struct {
-		Extensions  string
-		SnowflakeId int
+	type ext struct {
+		Extensions string
+		Id         int
 	}
 
-	var snowflakeExtArr []snowflakeExt
+	var extArr []ext
 
-	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT max(id), extensions FROM fingerprint WHERE type = 'snowflake' group by extensions"))
+	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT max(id), extensions FROM fingerprint WHERE type = $1 group by extensions"), fpType)
 	if err != nil {
-		fmt.Printf("Snowflake extensions query failed: %v", err)
+		fmt.Printf("Extensions query failed: %v", err)
 	}
 
 	for rows.Next() {
-		se := snowflakeExt{}
-		if err := rows.Scan(&se.SnowflakeId, &se.Extensions); err != nil {
+		se := ext{}
+		if err := rows.Scan(&se.Id, &se.Extensions); err != nil {
 			fmt.Printf("Could not scan: %v\n", err)
 			return
 		}
-		snowflakeExtArr = append(snowflakeExtArr, se)
+		extArr = append(extArr, se)
 	}
 	rows.Close()
 
-	for _, se := range snowflakeExtArr {
-		cmpRows, err := db.Query(context.Background(), fmt.Sprintf("SELECT count(id), extensions, levenshtein(extensions, $1) FROM fingerprint WHERE type != 'snowflake' AND levenshtein(extensions, $2) BETWEEN 1 AND 32 GROUP BY extensions"), se.Extensions, se.Extensions)
+	for _, se := range extArr {
+		cmpRows, err := db.Query(context.Background(), fmt.Sprintf("SELECT count(id), extensions, levenshtein(extensions, $1) FROM fingerprint WHERE type != $2 AND levenshtein(extensions, $3) BETWEEN 1 AND 32 GROUP BY extensions"), se.Extensions, fpType, se.Extensions)
 		if err != nil {
 			fmt.Printf("Levenshtein query failed: %v\n", err)
 		}
@@ -306,7 +316,7 @@ func analyzeLev(db *pgx.Conn) {
 			fmt.Println(fc.CmpExtensions)
 
 			var result int
-			err := db.QueryRow(context.Background(), "INSERT INTO fuzzy_extensions (snowflake_id, levenshtein, extensions) VALUES ($1, $2 , $3) RETURNING id", se.SnowflakeId, fc.Distance, fc.CmpExtensions).Scan(&result)
+			err := db.QueryRow(context.Background(), "INSERT INTO fuzzy_extensions (type_id, levenshtein, extensions) VALUES ($1, $2 , $3) RETURNING id", se.Id, fc.Distance, fc.CmpExtensions).Scan(&result)
 			if err != nil {
 				fmt.Printf("Error on insert fuzzy_extensions: %v\n", err)
 			}
@@ -339,24 +349,29 @@ func main() {
 
 	cmd := os.Args[1]
 
+	if len(os.Args) < 3 {
+		fmt.Println("Please provide action and fingerprint type")
+		os.Exit(1)
+	}
+
+	fingerprintType = os.Args[2]
+
 	if cmd == "analyze" {
 		for _, field := range analyzeFields {
-			analyze(db, field)
+			analyze(db, field, fingerprintType)
 		}
 		return
 	} else if cmd == "extensions" {
-		analyzeLev(db)
+		analyzeLev(db, fingerprintType)
 		return
 	} else if cmd != "fingerprint" {
 		return
 	}
 
 	if len(os.Args) < 4 {
-		fmt.Println("Please provide fingerprint type and a path to pcaps")
+		fmt.Println("Please provide action, fingerprint type and a path to pcaps")
 		os.Exit(1)
 	}
-
-	fingerprintType = os.Args[2]
 
 	err = filepath.Walk(os.Args[3], func(path string, info os.FileInfo, err error) error {
 		if err != nil {

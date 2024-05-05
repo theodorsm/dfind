@@ -29,7 +29,7 @@ CREATE TABLE fragment(
 DROP TABLE IF EXISTS fuzzy_extensions;
 CREATE TABLE fuzzy_extensions(
   id              SERIAL PRIMARY KEY,
-  snowflake_id    INT NOT NULL,
+  type_id    INT NOT NULL,
 	levenshtein   INT NOT NULL, 
 	extensions      VARCHAR(500) NOT NULL
 );
