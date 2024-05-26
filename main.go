@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gopacket/gopacket"
@@ -222,7 +223,8 @@ func analyze(db *pgx.Conn, field string, fpType string) {
 	var fields []string
 	var identifiers []string
 
-	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT %s FROM fingerprint group by %s", field, field))
+	// UNSAFE SQL
+	rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT %s FROM fingerprint where type = $1 group by %s", field, field), fpType)
 	if err != nil {
 		fmt.Printf("%s query failed: %v\n", field, err)
 	}
@@ -236,8 +238,11 @@ func analyze(db *pgx.Conn, field string, fpType string) {
 		fields = append(fields, fieldVal)
 	}
 
+	numExt := 0
+
 	for _, cl := range fields {
 		var results []string
+		// UNSAFE SQL
 		rows, err := db.Query(context.Background(), fmt.Sprintf("SELECT type FROM fingerprint where %s = $1 group by type", field), cl)
 		if err != nil {
 			fmt.Printf("type query failed: %v\n", err)
@@ -253,13 +258,33 @@ func analyze(db *pgx.Conn, field string, fpType string) {
 		}
 		if len(results) == 1 && results[0] == fpType {
 			identifiers = append(identifiers, cl)
+			if field == "extensions" {
+				rows, err = db.Query(context.Background(), "SELECT count(id) FROM fingerprint where extensions = $1", cl)
+				if err != nil {
+					fmt.Printf("type query failed: %v\n", err)
+				}
+				defer rows.Close()
+				for rows.Next() {
+					var res string
+					if err := rows.Scan(&res); err != nil {
+						fmt.Printf("Could not scan type for field %s: %v\n", field, err)
+						return
+					}
+					tmp, _ := strconv.Atoi(res)
+					numExt += tmp
+				}
+			}
 		}
 	}
 	if len(identifiers) > 0 {
-		fmt.Printf("Identifiers for %s: %v\n", field, identifiers)
+		fmt.Printf("Identifiers for %s (#%d): %v\n", field, len(identifiers), identifiers)
+		if field == "extensions" {
+			fmt.Printf("Total numer of messages with unique extensions %d\n", numExt)
+		}
 	} else {
 		fmt.Printf("No identifiers were found for %s\n", field)
 	}
+
 }
 
 func analyzeLev(db *pgx.Conn, fpType string) {
