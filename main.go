@@ -259,7 +259,7 @@ func analyze(db *pgx.Conn, field string, fpType string) {
 		if len(results) == 1 && results[0] == fpType {
 			identifiers = append(identifiers, cl)
 			if field == "extensions" {
-				rows, err = db.Query(context.Background(), "SELECT count(id) FROM fingerprint where extensions = $1", cl)
+				rows, err = db.Query(context.Background(), "SELECT count(id) FROM fingerprint where extensions = $1 group by filename", cl)
 				if err != nil {
 					fmt.Printf("type query failed: %v\n", err)
 				}
